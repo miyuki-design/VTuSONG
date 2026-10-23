@@ -1,105 +1,144 @@
-// VTuSONG genre-sensitive songwriting engine — replaces worker/index.js.
-const INSTRUMENTS = ['piano','guitar','bass','drums','strings','synth'];
-const PATTERNS = ['pulse','arpeggio','strum','pad','groove'];
-const QUALITIES = ['major','minor','dom7','sus4'];
-const object = properties => ({type:'object',additionalProperties:false,required:Object.keys(properties),properties});
-const schema = object({
-  title:{type:'string'},genre:{type:'string'},theme:{type:'string'},mood:{type:'string'},
-  key:{type:'string'},bpm:{type:'integer'},bars:{type:'integer'},
-  lyrics:{type:'array',items:object({bar:{type:'integer'},text:{type:'string'}})},
-  chords:{type:'array',items:object({root:{type:'integer'},quality:{type:'string',enum:QUALITIES}})},
-  melody:{type:'array',items:object({bar:{type:'integer'},beat:{type:'number'},duration:{type:'number'},midi:{type:'integer'},lyric:{type:'string'}})},
-  arrangement:{type:'array',items:object({instrument:{type:'string',enum:INSTRUMENTS},pattern:{type:'string',enum:PATTERNS},level:{type:'number'}})}
+// VTuSONG genre-aware original songwriting engine v4.
+// Replace worker/index.js. Preserve existing client song schema and /api endpoints.
+const INSTRUMENTS=['piano','guitar','bass','drums','strings','synth'];
+const PATTERNS=['pulse','arpeggio','strum','pad','groove'];
+const QUALITIES=['major','minor','dom7','sus4'];
+const obj=properties=>({type:'object',additionalProperties:false,required:Object.keys(properties),properties});
+const schema=obj({
+ title:{type:'string'},genre:{type:'string'},theme:{type:'string'},mood:{type:'string'},
+ key:{type:'string'},bpm:{type:'integer'},bars:{type:'integer'},
+ lyrics:{type:'array',items:obj({bar:{type:'integer'},text:{type:'string'}})},
+ chords:{type:'array',items:obj({root:{type:'integer'},quality:{type:'string',enum:QUALITIES}})},
+ melody:{type:'array',items:obj({bar:{type:'integer'},beat:{type:'number'},duration:{type:'number'},midi:{type:'integer'},lyric:{type:'string'}})},
+ arrangement:{type:'array',items:obj({instrument:{type:'string',enum:INSTRUMENTS},pattern:{type:'string',enum:PATTERNS},level:{type:'number'}})}
 });
-const jsonHeaders = {'Content-Type':'application/json; charset=utf-8','Access-Control-Allow-Origin':'*','Access-Control-Allow-Methods':'POST, OPTIONS','Access-Control-Allow-Headers':'Content-Type'};
-const json=(body,status=200)=>new Response(JSON.stringify(body),{status,headers:jsonHeaders});
-const GENRE = {
-  'アニソン': `【アニソン専用・最優先】疾走感と歌いたくなるサビ。イントロの代わりにAメロ1〜8小節は音域を抑えた語りかける旋律、9〜16小節では明確に音域を上げ、長めの頂点音を置く。サビ頭の印象的な3〜5音のフックを反復・変形。音価に緩急を付け、同じ長さの音符の羅列を避ける。拍頭に強い音が来る箇所と食う箇所を組み合わせる。明るい王道なら長調でIV–V–iii–vi等の情緒ある動き、熱い曲なら短調や借用感も活用。ただし無理な高音の連発は避ける。母音が伸ばしやすい日本語をサビのロングトーンに。`,
-  'J-POP': `親しみやすい歌唱フレーズ、反復と少しの意外性。Aメロは会話調、サビは順次進行と適度な跳躍で記憶に残る。短長音を交えフレーズ末尾に休符を置く。`,
-  'ジャズ': `歌うジャズ。シンコペーションで拍裏から入る音を多くし、休符と長短を大胆に対比させる。ブルーノート相当の♭3/♭5/♭7等を通過音として取り入れ、コードトーンへ自然に解決する。滑らかな短いフレーズと間を作る。半拍単位の範囲でも裏拍を積極的に使う。`,
-  'ロック': `力強い短い反復モチーフ、言葉のアクセントを利かせた音程、大きめの跳躍はサビで限定的に。Aメロは低めで歯切れよく、サビは解放感のある伸ばす音とコール風フック。`,
-  'バラード': `ゆったりした息の長い歌唱線、1～2拍の音を有効活用。Aメロは音数を絞りサビで高揚。休符と終止の余韻を大切にして歌詞の意味を優先。`,
-  'EDM': `短い強いフックを中心に、短音の反復とサビの音域上昇を組み合わせる。反復だけにならないよう、4小節ごとに着地点を変える。`,
-  'シティポップ': `軽いシンコペーション、都会的で滑らかな旋律、9th/7thを感じる経過音とコードに沿うメロディー。音を詰め込みすぎず、リズムで洒落た雰囲気を出す。`,
-  'ボカロ系': `速い言葉の譜割りを意識しながらも実際に人間が歌える範囲。跳躍、音程の反復、半拍単位の畳み掛けを組み合わせ、サビ頭に明確なフックを置く。`
+const headers={'Content-Type':'application/json; charset=utf-8','Access-Control-Allow-Origin':'*','Access-Control-Allow-Methods':'POST, OPTIONS','Access-Control-Allow-Headers':'Content-Type'};
+const json=(body,status=200)=>new Response(JSON.stringify(body),{status,headers});
+
+// Measurable, broadly useful songwriting features—not copies of any artist's catalog.
+// The five feature families are always included in our brief and checked on generated melodies:
+// rhythmic anticipation, a recognizable hook, a dramatic chorus, a chromatic passing tone,
+// and accents/space. Genre changes their relative emphasis, not their presence.
+const GENRE={
+ 'アニソン':{bpm:[125,180],description:'高揚する劇的なサビ、力強い歌唱線、勢いと息継ぎの両立',weights:[2,3,3,1,2]},
+ 'J-POP':{bpm:[85,155],description:'語感が自然で覚えやすいフック、サビへの滑らかな展開',weights:[2,3,2,1,2]},
+ 'ジャズ':{bpm:[75,165],description:'シンコペーション、間、色彩的な経過音、会話するような歌メロ',weights:[3,2,1,3,3]},
+ 'ロック':{bpm:[100,180],description:'歯切れのよい短いモチーフ、強い着地点、サビの解放感',weights:[2,2,3,1,3]},
+ 'バラード':{bpm:[60,105],description:'息の長い音、余白、情感のある音程推移とサビの頂点',weights:[1,2,3,1,3]},
+ 'EDM':{bpm:[105,160],description:'反復フックと変奏、裏拍のアクセント、サビのエネルギー',weights:[3,3,2,1,2]},
+ 'シティポップ':{bpm:[80,125],description:'滑らかな歌唱線、軽い裏拍、洗練された経過音',weights:[2,2,2,3,2]},
+ 'ボカロ系':{bpm:[115,180],description:'リズムの切れ味と劇的な音程変化、歌唱可能な音域',weights:[3,3,3,2,2]}
 };
+const features=[
+ 'リズムの意外性: 8分裏拍で始まる音を含め、次の音への期待を作る',
+ '記憶に残るフック: サビ頭の3〜5音に短いモチーフを作り、後で変奏して再登場させる',
+ '劇的なサビ: Aメロよりサビの平均音域を上げ、長めの頂点音を1つ以上置く',
+ '色彩的な経過音: コード外の半音階的な経過音を少なくとも1回使い、直後に半音で解決する',
+ 'アクセントと余白: 音価の長短を混ぜ、少なくとも2小節に明確な休符を設ける'
+];
 export function verifyInput(raw){
- if(!raw||typeof raw!=='object') throw new Error('入力形式が正しくありません');
+ if(!raw||typeof raw!=='object')throw new Error('入力形式が正しくありません');
  const genre=String(raw.genre||'').slice(0,40),theme=String(raw.theme||'').slice(0,160),mood=String(raw.mood||'').slice(0,50);
- const vocalRange=['low','middle','high'].includes(raw.vocalRange)?raw.vocalRange:'middle';
- const instruments=Array.isArray(raw.instruments)?[...new Set(raw.instruments.filter(i=>INSTRUMENTS.includes(i)))]:[];
+ const instruments=Array.isArray(raw.instruments)?[...new Set(raw.instruments.filter(x=>INSTRUMENTS.includes(x)))]:[];
  if(!genre||!instruments.length)throw new Error('ジャンルと楽器を指定してください');
- return {genre,theme,mood,vocalRange,instruments};
+ return {genre,theme,mood,instruments,vocalRange:['low','middle','high'].includes(raw.vocalRange)?raw.vocalRange:'middle'};
 }
-function validate(song,input){
- if(!song||song.bars!==16||!Array.isArray(song.chords)||song.chords.length!==16||!Array.isArray(song.lyrics)||song.lyrics.length!==16)throw new Error('歌詞またはコードの小節数が不足しています');
- if(!Number.isInteger(song.bpm)||song.bpm<60||song.bpm>180)throw new Error('BPMが範囲外です');
- if(!Array.isArray(song.melody)||song.melody.length<24||song.melody.length>160)throw new Error('メロディーが不完全です');
- if(!song.melody.every(n=>Number.isInteger(n.bar)&&n.bar>=0&&n.bar<16&&Number.isFinite(n.beat)&&n.beat>=0&&n.beat<4&&Number.isFinite(n.duration)&&n.duration>0&&n.beat+n.duration<=4.001&&Number.isInteger(n.midi)&&typeof n.lyric==='string'&&n.lyric.length<=30&&n.midi>=45&&n.midi<=88))throw new Error('音符データの検証に失敗しました');
- if(!song.chords.every(c=>Number.isInteger(c.root)&&c.root>=36&&c.root<=83&&QUALITIES.includes(c.quality)))throw new Error('コードデータの検証に失敗しました');
- if(!song.lyrics.every(l=>Number.isInteger(l.bar)&&l.bar>=0&&l.bar<16&&typeof l.text==='string'))throw new Error('歌詞データの検証に失敗しました');
- if(!Array.isArray(song.arrangement)||song.arrangement.length!==input.instruments.length||!input.instruments.every(i=>song.arrangement.some(a=>a.instrument===i))||!song.arrangement.every(a=>input.instruments.includes(a.instrument)&&PATTERNS.includes(a.pattern)&&Number.isFinite(a.level)&&a.level>=0&&a.level<=1))throw new Error('楽器選択が正しく反映されていません');
- // 音符の歌詞断片を正本とし、歌詞欄との不整合をなくす。
- // 例: 4つの音符に「き」「み」「の」「うた」を対応させる。
+const near=(a,b)=>Math.abs(a-b)<.00001;
+function notesInBar(song,b){return song.melody.filter(n=>n.bar===b).sort((a,c)=>a.beat-c.beat);}
+function inspect(song,input){
+ if(!song||song.bars!==16||!Array.isArray(song.chords)||song.chords.length!==16||!Array.isArray(song.lyrics)||song.lyrics.length!==16)throw Error('歌詞・コードの16小節構成が不正です');
+ if(!Number.isInteger(song.bpm)||song.bpm<60||song.bpm>180)throw Error('BPMが範囲外です');
+ if(!Array.isArray(song.melody)||song.melody.length<24||song.melody.length>160)throw Error('メロディーの長さが不正です');
+ if(!song.melody.every(n=>Number.isInteger(n.bar)&&n.bar>=0&&n.bar<16&&Number.isFinite(n.beat)&&n.beat>=0&&n.beat<4&&near(n.beat*2,Math.round(n.beat*2))&&Number.isFinite(n.duration)&&n.duration>0&&near(n.duration*2,Math.round(n.duration*2))&&n.beat+n.duration<=4.0001&&Number.isInteger(n.midi)&&n.midi>=45&&n.midi<=88&&typeof n.lyric==='string'&&n.lyric.length<=30))throw Error('音符データが不正です');
+ if(!song.chords.every(c=>Number.isInteger(c.root)&&c.root>=36&&c.root<=83&&QUALITIES.includes(c.quality)))throw Error('コードが不正です');
+ if(!Array.isArray(song.arrangement)||song.arrangement.length!==input.instruments.length||!input.instruments.every(i=>song.arrangement.filter(a=>a.instrument===i).length===1)||!song.arrangement.every(a=>input.instruments.includes(a.instrument)&&PATTERNS.includes(a.pattern)&&Number.isFinite(a.level)&&a.level>=0&&a.level<=1))throw Error('指定楽器と編曲が一致しません');
  for(let bar=0;bar<16;bar++){
-  const notes=song.melody.filter(n=>n.bar===bar).sort((a,b)=>a.beat-b.beat);
-  if(!notes.length||notes.some(n=>!n.lyric.trim()))throw new Error(`小節${bar+1}の音符と歌詞が対応していません`);
-  const text=notes.map(n=>n.lyric).join('');
-  if(!text.trim())throw new Error(`小節${bar+1}に歌詞がありません`);
-  song.lyrics[bar]={bar,text};
+  const notes=notesInBar(song,bar);if(!notes.length||notes.some(n=>!n.lyric.trim()))throw Error(`小節${bar+1}の歌詞の割当が不正です`);
+  if(notes.some((n,i)=>i>0&&n.beat<notes[i-1].beat+notes[i-1].duration-.0001))throw Error(`小節${bar+1}の主旋律が重複しています`);
+  song.lyrics[bar]={bar,text:notes.map(n=>n.lyric).join('')};
  }
- if(typeof song.title!=='string'||song.title.length>80)throw new Error('タイトルデータが不正です');
+ if(typeof song.title!=='string'||song.title.length>80||typeof song.key!=='string')throw Error('楽曲メタデータが不正です');
  return song;
 }
-const rhythmGuide = `再生側は4/4、16小節、各小節4拍。音符はbeat=0/0.5/1/1.5/2/2.5/3/3.5、duration=0.5/1/1.5/2（拍単位）から選ぶ。beat+duration<=4。各小節の音数は2〜6を目安とし、全体は32〜96音。休符は音符間の隙間で表す。開始beatのパターン、長短、フレーズ末尾の休符をジャンルごとに変化させる。`;
-function rangeOf(x){return x==='low'?'MIDI 48〜67 (C3〜G4)':x==='high'?'MIDI 60〜81 (C4〜A5)':'MIDI 55〜76 (G3〜E5)';}
-function promptFor(input){
+// Analyze only observable musical properties; do not claim automated artistic quality scoring.
+export function scoreFeatures(song){
+ const notes=[...song.melody].sort((a,b)=>a.bar-b.bar||a.beat-b.beat);
+ const verse=notes.filter(n=>n.bar<8),chorus=notes.filter(n=>n.bar>=8);
+ const mean=x=>x.reduce((s,n)=>s+n.midi,0)/Math.max(x.length,1);
+ const anticipated=notes.filter(n=>n.beat%1===.5).length;
+ const gapBars=Array.from({length:16},(_,b)=>{const n=notesInBar(song,b);return n.length&& (n[0].beat>.01||n.some((x,i)=>i>0&&x.beat>n[i-1].beat+n[i-1].duration+.001)||n[n.length-1].beat+n[n.length-1].duration<3.99)}).filter(Boolean).length;
+ // Motif repeats count exact relative pitch/rhythm fingerprints in chorus, including transposition.
+ const motif=(a,i)=>[1,2].map(d=>`${a[i+d].midi-a[i].midi}:${(a[i+d].beat+a[i+d].bar*4)-(a[i].beat+a[i].bar*4)}`).join('|');
+ const motifs=new Map();for(let i=0;i+2<chorus.length;i++){const seq=chorus.slice(i,i+3);if(seq[2].bar*4+seq[2].beat-seq[0].bar*4-seq[0].beat>5)continue;const k=motif(chorus,i);motifs.set(k,(motifs.get(k)||0)+1);}
+ const hook=[...motifs.values()].some(x=>x>=2);
+ const chromatic=notes.some((n,i)=>{if(i<1||i+1>=notes.length)return false;const prev=notes[i-1],next=notes[i+1];return Math.abs(n.midi-prev.midi)===1&&Math.abs(next.midi-n.midi)===1&&n.midi!==next.midi&&Math.abs(next.midi-prev.midi)===2;});
+ const longChorus=chorus.some(n=>n.duration>=1.5);
+ const chorusLift=mean(chorus)>=mean(verse)+1.5&&longChorus;
+ const durations=new Set(notes.map(n=>n.duration));
+ return {anticipation:anticipated>=Math.max(3,Math.round(notes.length*.08)),hook,chorusLift,chromatic,space:gapBars>=2&&durations.size>=3,
+  details:{anticipated,gapBars,verseMean:mean(verse),chorusMean:mean(chorus),longChorus,motifRepeated:hook}};
+}
+const ranges={low:'48〜67',middle:'55〜76',high:'60〜81'};
+function prompt(input,feedback=''){
  const style=GENRE[input.genre]||GENRE['J-POP'];
- return `あなたはジャンルの様式を理解したプロの作詞家・作曲家・編曲家。単なるポップスのテンプレート化は禁止。指示されたジャンルの「主旋律だけ」を聴いても判別できるよう作曲する。既存作品のメロディー・歌詞は模倣しない。\n\n【今回のジャンル】${input.genre}\n${style}\n\n【厳守するデータ仕様】\n歌詞は小節0〜15の16行、コードは16個を順番に並べる。Aメロは0〜7、サビは8〜15。各小節に主旋律の音を配置する。${rhythmGuide}\n音域は${rangeOf(input.vocalRange)}を原則とし、跳躍は歌いやすく。コードrootはMIDI48〜71程度、qualityはmajor/minor/dom7/sus4のいずれか。コード進行に沿い旋律を成立させる。\n【最重要：歌詞と音符の厳密な対応】melody配列の音符すべてにlyricフィールド（その音で歌う歌詞の断片）を入れる。原則1音符に日本語の1モーラ、長い音符には1〜2モーラを割り当ててもよい。促音「っ」、拗音「ゃゅょ」は前後と自然に結合する。メロディー各小節の音符をbeat順に並べてlyric文字列を連結した結果が、その小節lyrics.textと必ず完全一致すること。例: melody内の小節0のlyricが順に「き」「み」「の」「うた」ならlyricsの小節0は「きみのうた」。リズム・言葉・意味を同時に作り、歌詞を後から音符に押し込めない。休符は音符間の空白として表す。1小節あたり2〜6音に対し2〜6モーラ程度の歌詞を基本とする。全16小節でこの対応を厳守する。サビでは8小節以前の音域より上を自然に使い、反復できる強い3〜5音フック、サビ頭の高揚、頂点の伸ばせる母音を含む2拍ロングトーンを目指す。\narrangementは指定された楽器だけを1回ずつ入れる。instrumentは指定英名、patternはpulse/arpeggio/strum/pad/groove、levelは0〜1。テンポはBPM60〜180。16小節固定。全部のフィールドを返し、余計なフィールドは付けない。\n一様なメロディー、全小節同じリズム、コード進行の機械的な繰り返しを避ける。譜割り、反復フック、休符、サビの音域、フレーズ単位でジャンルらしい展開を作る。`;
+ return `あなたは独創的な日本語楽曲の作詞・作曲・編曲家。実在の作曲家の作品や特徴的な旋律を複製・模倣せず、下記の抽象的な音楽技法を組み合わせて完全な新曲を作る。\nジャンル:${input.genre}、指針:${style.description}。\n【すべての曲に入れる5要素】${features.map((f,i)=>`\n${i+1}. ${f}（重点${style.weights[i]}/3）`).join('')}\nジャンルらしさは旋律そのものにも表す。\n【必須データ】4/4拍子16小節、0〜7がAメロ、8〜15がサビ。全小節に歌詞・メロディー・1コード。BPMは${style.bpm[0]}〜${style.bpm[1]}。主旋律は計32〜96音で各小節2〜6音程度。開始beat=0,0.5,...3.5、duration=0.5,1,1.5,2、beat+duration<=4。重なるメロディー音は禁止。休符は音符の隙間で表現する。\n【歌詞一致は最優先】melodyの各音符にlyricを設定し、1音符につき歌える短い日本語断片を付す。各小節の音符をbeat順に並べてlyricを連結したものをlyrics.textにも設定。拗音や促音は前後と自然につなげる。音域はMIDI ${ranges[input.vocalRange]}を原則とし歌いやすく。サビはAメロより高揚し2拍近い頂点音を置く。\nコードは16個、root MIDI36〜83、qualityはmajor/minor/dom7/sus4。arrangementは指定楽器のみを一度ずつ含める。patternはpulse/arpeggio/strum/pad/groove。16小節を通じた単純反復は避ける。歌詞とメロディーと和声の整合性を優先。\n${feedback}`;
+}
+async function askAI(input,env,task,feedback){
+ const response=await fetch('https://api.openai.com/v1/chat/completions',{
+ method:'POST',headers:{Authorization:`Bearer ${env.OPENAI_API_KEY}`,'Content-Type':'application/json'},
+ body:JSON.stringify({model:env.OPENAI_MODEL||'gpt-4.1-mini',temperature:.8,max_completion_tokens:7500,
+  messages:[{role:'system',content:prompt(input,feedback)},{role:'user',content:`ジャンル:${input.genre}; 希望楽器:${input.instruments.join(',')}; テーマ:${input.theme||'自由'}; 雰囲気:${input.mood||'自由'}; 歌唱音域:${input.vocalRange}。${task}`}],
+  response_format:{type:'json_schema',json_schema:{name:'vtusong_song',strict:true,schema}}})});
+ if(!response.ok){const detail=await response.text();throw Error(`AI API (${response.status}): ${detail.slice(0,220)}`);}
+ const data=await response.json();if(data.choices?.[0]?.finish_reason==='length')throw Error('AIの出力が上限で中断されました');
+ const content=data.choices?.[0]?.message?.content;if(!content)throw Error('AIが楽曲を返しませんでした');
+ return inspect(JSON.parse(content),input);
 }
 export async function createSong(input,env,revision=null){
- if(!env.OPENAI_API_KEY)throw new Error('サーバー側のOPENAI_API_KEYが未設定です');
- const hints={lyrics:'歌詞のみ変更。各小節の元の音符の個数と拍位置は絶対に変えず、各音符のlyricだけを書き換える。',melody:'メロディーを変更して歌詞の譜割りも一致させる。コードは保持する。',arrangement:'編曲パターンとレベルのみ変更。',chorus:'後半8小節の歌詞・メロディー・コードのみ変更。ジャンルらしい強いサビに。'};
- const task=revision?`既存楽曲の変更対象：${hints[revision.mode]}。ほかの部分は極力残す。元楽曲：${JSON.stringify(revision.song)}`:'新規オリジナル楽曲を制作。ジャンルと歌唱可能性を最優先。';
- const response=await fetch('https://api.openai.com/v1/chat/completions',{
-  method:'POST',headers:{'Authorization':`Bearer ${env.OPENAI_API_KEY}`,'Content-Type':'application/json'},
-  body:JSON.stringify({model:env.OPENAI_MODEL||'gpt-4.1-mini',temperature:.85,max_completion_tokens:7500,
-   messages:[{role:'system',content:promptFor(input)},{role:'user',content:`ジャンル=${input.genre}\n楽器=${input.instruments.join(', ')}\nテーマ=${input.theme||'自由'}\n雰囲気=${input.mood||'自由'}\n歌唱音域=${rangeOf(input.vocalRange)}\n${task}`}],
-   response_format:{type:'json_schema',json_schema:{name:'vtusong_song',strict:true,schema}}})
- });
- if(!response.ok){const problem=await response.text();throw new Error(`AI API (${response.status}): ${problem.slice(0,250)}`);}
- const data=await response.json();const content=data?.choices?.[0]?.message?.content;
- if(!content)throw new Error(`AI応答が空です (${data?.choices?.[0]?.finish_reason||'unknown'})`);
- const next=JSON.parse(content);
- if(!revision)return validate(next,input);
- const old=revision.song;const song={...old};
- switch(revision.mode){
-  case 'lyrics': { const oldNotes=[...old.melody].sort((a,b)=>a.bar-b.bar||a.beat-b.beat); const newNotes=[...next.melody].sort((a,b)=>a.bar-b.bar||a.beat-b.beat); song.melody=oldNotes.map((n,i)=>({...n,lyric:newNotes[i]?.lyric||n.lyric||''})); song.lyrics=next.lyrics; break; }
-  case 'melody': song.melody=next.melody; song.lyrics=next.lyrics; break;
-  case 'arrangement':song.arrangement=next.arrangement;break;
-  case 'chorus':
-   song.lyrics=[...old.lyrics.filter(l=>l.bar<8),...next.lyrics.filter(l=>l.bar>=8)];
-   song.melody=[...old.melody.filter(n=>n.bar<8),...next.melody.filter(n=>n.bar>=8)];
-   song.chords=old.chords.map((c,i)=>i>=8?next.chords[i]:c);break;
-  default:throw new Error('再生成モードが不正です');
+ if(!env.OPENAI_API_KEY)throw Error('サーバー側のOPENAI_API_KEYが未設定です');
+ const hints={lyrics:'歌詞のみ変更。元の音符数と配置を変えず各音符のlyricのみ変更する。',melody:'コード進行と編曲を変えず、歌詞と対応した主旋律を再作曲する。',arrangement:'楽器パターンと音量のみ変更する。',chorus:'後半8小節の歌詞・主旋律・コードだけ変更する。'};
+ if(revision&&!hints[revision.mode])throw Error('再生成モードが不正です');
+ const task=revision?`既存曲の部分修正：${hints[revision.mode]} 既存JSON=${JSON.stringify(revision.song)}`:'新規オリジナル曲を制作。';
+ let best=null,bestCount=-1,lastError=null;
+ // One initial generation and at most one quality-focused retry: bounded API cost.
+ for(let attempt=0;attempt<2;attempt++){
+  const feedback=attempt===0?'':`前回の生成で不足した要素を確実に入れてください: ${lastError||'サビの上昇、裏拍、フック、半音経過音、休符'}。歌詞と音符の対応を厳守。`;
+  try{
+   const proposed=await askAI(input,env,task,feedback);
+   let candidate=proposed;
+   if(revision){
+    const old=revision.song;
+    candidate={...old};
+    switch(revision.mode){
+     case 'lyrics': {const a=[...old.melody].sort((x,y)=>x.bar-y.bar||x.beat-y.beat), b=[...proposed.melody].sort((x,y)=>x.bar-y.bar||x.beat-y.beat); candidate.melody=a.map((n,i)=>({...n,lyric:b[i]?.lyric||n.lyric}));candidate.lyrics=old.lyrics;break;}
+     case 'melody':candidate.melody=proposed.melody;candidate.lyrics=proposed.lyrics;break;
+     case 'arrangement':candidate.arrangement=proposed.arrangement;break;
+     case 'chorus':candidate.melody=[...old.melody.filter(n=>n.bar<8),...proposed.melody.filter(n=>n.bar>=8)];candidate.lyrics=old.lyrics;candidate.chords=old.chords.map((ch,i)=>i<8?ch:proposed.chords[i]);break;
+    }
+    inspect(candidate,input);
+   }
+   const scores=scoreFeatures(candidate);const misses=Object.entries(scores).filter(([k,v])=>k!=='details'&&!v).map(([k])=>k);
+   if(misses.length<5-bestCount){best=candidate;bestCount=5-misses.length;}
+   if(revision||misses.length===0)return candidate;
+   lastError=misses.join(', ');
+  }catch(e){lastError=e?.message||'不明なエラー';if(attempt===1&&!best)throw e;}
  }
- return validate(song,input);
+ // Prefer returning a valid song rather than falsely claiming hard guarantees about quality.
+ if(!best)throw Error(lastError||'生成データの検証に失敗しました');
+ return best;
 }
 export default {async fetch(request,env){
  const url=new URL(request.url);
- if(request.method==='OPTIONS')return new Response(null,{headers:jsonHeaders});
- if(url.pathname==='/health')return json({ok:true,service:'VTuSONG AI',genreEngine:'v3',lyricNoteAlignment:true});
+ if(request.method==='OPTIONS')return new Response(null,{headers});
+ if(url.pathname==='/health')return json({ok:true,service:'VTuSONG AI',styleEngine:'v4'});
  if(!['/api/generate','/api/revise'].includes(url.pathname))return json({error:'Not found'},404);
  if(request.method!=='POST')return json({error:'POST only'},405);
  if(Number(request.headers.get('Content-Length')||0)>32768)return json({error:'入力が長すぎます'},413);
  let input,revision=null;
- try{
-  const body=await request.json();input=verifyInput(body.input??body);
-  if(url.pathname==='/api/revise'){
-   if(!['lyrics','melody','arrangement','chorus'].includes(body.mode))throw new Error('修正対象が不正です');
-   revision={mode:body.mode,song:validate(body.song,input)};
-  }
- }catch(e){return json({error:e.message},400);}
+ try{const body=await request.json();input=verifyInput(body.input??body);if(url.pathname==='/api/revise'){
+  if(!['lyrics','melody','arrangement','chorus'].includes(body.mode))throw Error('修正対象が不正です');
+  revision={mode:body.mode,song:inspect(body.song,input)};
+ }}catch(e){return json({error:e.message},400);}
  try{return json({song:await createSong(input,env,revision)});}
  catch(e){console.error('song generation failed',e?.message);return json({error:'AI生成に失敗しました。少し条件を変えて再試行してください。',detail:String(e?.message||'').slice(0,160)},502);}
 }};
