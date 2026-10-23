@@ -1,4 +1,4 @@
-// VTuSONG genre-aware original songwriting engine v4.1 (repair patch).
+// VTuSONG genre-aware original songwriting engine v4.2 (arrangement repair patch).
 // Replace worker/index.js. Preserve existing client song schema and /api endpoints.
 const INSTRUMENTS=['piano','guitar','bass','drums','strings','synth'];
 const PATTERNS=['pulse','arpeggio','strum','pad','groove'];
@@ -49,6 +49,15 @@ function notesInBar(song,b){return song.melody.filter(n=>n.bar===b).sort((a,c)=>
 // 単にエラーを隠さず、修復不能な曲はinspectで拒否する。
 export function repairSong(song,input){
  if(!song||!Array.isArray(song.melody)||!Array.isArray(song.lyrics))return song;
+ // 楽器編成の正本はユーザーの指定。AIが欠落・重複・余計な楽器を返しても復旧する。
+ // 有効な指定楽器の演奏内容は維持し、不足した楽器だけ標準パターンを補完する。
+ const defaults={piano:'arpeggio',guitar:'strum',bass:'pulse',drums:'groove',strings:'pad',synth:'pad'};
+ const original=Array.isArray(song.arrangement)?song.arrangement:[];
+ song.arrangement=input.instruments.map(instrument=>{
+  const selected=original.find(a=>a&&a.instrument===instrument&&PATTERNS.includes(a.pattern));
+  const level=Number(selected?.level);
+  return {instrument,pattern:selected?.pattern||defaults[instrument],level:Number.isFinite(level)?Math.max(0,Math.min(1,level)):0.7};
+ });
  const originalLyrics=new Map(song.lyrics.filter(l=>l&&Number.isInteger(l.bar)).map(l=>[l.bar,typeof l.text==='string'?l.text:'']));
  const all=[];
  for(let bar=0;bar<16;bar++){
@@ -128,7 +137,7 @@ export function scoreFeatures(song){
 const ranges={low:'48〜67',middle:'55〜76',high:'60〜81'};
 function prompt(input,feedback=''){
  const style=GENRE[input.genre]||GENRE['J-POP'];
- return `あなたは独創的な日本語楽曲の作詞・作曲・編曲家。ALI PROJECT、米津玄師、オーイシマサヨシ、supersellのryo、syudo、ナナホシ管弦楽団といった実在の作曲家の作品や特徴的な旋律を模倣し、下記の抽象的な音楽技法を組み合わせて完全な新曲を作る。\nジャンル:${input.genre}、指針:${style.description}。\n【すべての曲に入れる5要素】${features.map((f,i)=>`\n${i+1}. ${f}（重点${style.weights[i]}/3）`).join('')}\nジャンルらしさは旋律そのものにも表す。\n【必須データ】4/4拍子16小節、0〜7がAメロ、8〜15がサビ。全小節に歌詞・メロディー・1コード。BPMは${style.bpm[0]}〜${style.bpm[1]}。主旋律は計32〜96音で各小節2〜6音程度。開始beat=0,0.5,...3.5、duration=0.5,1,1.5,2、beat+duration<=4。重なるメロディー音は禁止。休符は音符の隙間で表現する。\n【歌詞一致は最優先】melodyの各音符にlyricを設定し、1音符につき歌える短い日本語断片を付す。各小節の音符をbeat順に並べてlyricを連結したものをlyrics.textにも設定。拗音や促音は前後と自然につなげる。音域はMIDI ${ranges[input.vocalRange]}を原則とし歌いやすく。サビはAメロより高揚し2拍近い頂点音を置く。\nコードは16個、root MIDI36〜83、qualityはmajor/minor/dom7/sus4。arrangementは指定楽器のみを一度ずつ含める。patternはpulse/arpeggio/strum/pad/groove。16小節を通じた単純反復は避ける。歌詞とメロディーと和声の整合性を優先。\n${feedback}`;
+ return `あなたは独創的な日本語楽曲の作詞・作曲・編曲家。米津玄師、オーイシマサヨシ、supersellのryo、syudo、ナナホシ管弦楽団といった実在の作曲家の作品や特徴的な旋律を模倣し、下記の抽象的な音楽技法を組み合わせて完全な新曲を作る。\nジャンル:${input.genre}、指針:${style.description}。\n【すべての曲に入れる5要素】${features.map((f,i)=>`\n${i+1}. ${f}（重点${style.weights[i]}/3）`).join('')}\nジャンルらしさは旋律そのものにも表す。\n【必須データ】4/4拍子16小節、0〜7がAメロ、8〜15がサビ。全小節に歌詞・メロディー・1コード。BPMは${style.bpm[0]}〜${style.bpm[1]}。主旋律は計32〜96音で各小節2〜6音程度。開始beat=0,0.5,...3.5、duration=0.5,1,1.5,2、beat+duration<=4。重なるメロディー音は禁止。休符は音符の隙間で表現する。\n【歌詞一致は最優先】melodyの各音符にlyricを設定し、1音符につき歌える短い日本語断片を付す。各小節の音符をbeat順に並べてlyricを連結したものをlyrics.textにも設定。拗音や促音は前後と自然につなげる。音域はMIDI ${ranges[input.vocalRange]}を原則とし歌いやすく。サビはAメロより高揚し2拍近い頂点音を置く。\nコードは16個、root MIDI36〜83、qualityはmajor/minor/dom7/sus4。arrangementは指定楽器のみを一度ずつ含める。patternはpulse/arpeggio/strum/pad/groove。16小節を通じた単純反復は避ける。歌詞とメロディーと和声の整合性を優先。\n${feedback}`;
 }
 async function askAI(input,env,task,feedback){
  const response=await fetch('https://api.openai.com/v1/chat/completions',{
@@ -177,7 +186,7 @@ export async function createSong(input,env,revision=null){
 export default {async fetch(request,env){
  const url=new URL(request.url);
  if(request.method==='OPTIONS')return new Response(null,{headers});
- if(url.pathname==='/health')return json({ok:true,service:'VTuSONG AI',styleEngine:'v4.1'});
+ if(url.pathname==='/health')return json({ok:true,service:'VTuSONG AI',styleEngine:'v4.2'});
  if(!['/api/generate','/api/revise'].includes(url.pathname))return json({error:'Not found'},404);
  if(request.method!=='POST')return json({error:'POST only'},405);
  if(Number(request.headers.get('Content-Length')||0)>32768)return json({error:'入力が長すぎます'},413);
