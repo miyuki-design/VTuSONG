@@ -10,9 +10,24 @@ jobs:
   ios:
     runs-on: macos-15
     timeout-minutes: 60
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Xcode 26 / iOS 26 SDK
+      - name: Select Xcode 26
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '26.3'
+
+      - name: Verify Xcode and iOS SDK
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: '22'
 
@@ -28,18 +43,37 @@ jobs:
         run: |
           npx cap add ios
           npx cap sync ios
+
           mkdir -p ios/App/App/Assets.xcassets/AppIcon.appiconset
-          cp public/AppIcon-1024.png ios/App/App/Assets.xcassets/AppIcon.appiconset/AppIcon-512@2x.png
+
+          cp public/AppIcon-1024.png \
+            ios/App/App/Assets.xcassets/AppIcon.appiconset/AppIcon-512@2x.png
+
           cat > ios/App/App/Assets.xcassets/AppIcon.appiconset/Contents.json <<'JSON'
-          {"images":[{"filename":"AppIcon-512@2x.png","idiom":"universal","platform":"ios","size":"1024x1024"}],"info":{"author":"xcode","version":1}}
+          {
+            "images": [
+              {
+                "filename": "AppIcon-512@2x.png",
+                "idiom": "universal",
+                "platform": "ios",
+                "size": "1024x1024"
+              }
+            ],
+            "info": {
+              "author": "xcode",
+              "version": 1
+            }
+          }
           JSON
 
+      # Apple Distribution certificate
       - name: Set up certificates
         uses: Apple-Actions/import-codesign-certs@v7
         with:
           p12-file-base64: ${{ secrets.APPSTORE_CERTIFICATES_FILE_BASE64 }}
           p12-password: ${{ secrets.APPSTORE_CERTIFICATES_PASSWORD }}
 
+      # App Store provisioning profile
       - name: Install provisioning profile
         uses: Apple-Actions/download-provisioning-profiles@v7
         with:
@@ -49,9 +83,8 @@ jobs:
           api-key-id: ${{ vars.APPSTORE_API_KEY_ID }}
           api-private-key: ${{ secrets.APPSTORE_API_PRIVATE_KEY }}
 
-      # Provisioning profile must be applied ONLY to the App target,
-      # never to Capacitor / CocoaPods targets.
-      - name: Configure signing for App target only
+      # Configure App target only
+      - name: Configure iOS deployment target and signing
         env:
           TEAM_ID: ${{ vars.APPSTORE_TEAM_ID }}
         run: |
@@ -59,31 +92,61 @@ jobs:
           require 'xcodeproj'
 
           project = Xcodeproj::Project.open('ios/App/App.xcodeproj')
-          app = project.targets.find { |target| target.name == 'App' }
+
+          app = project.targets.find do |target|
+            target.name == 'App'
+          end
+
           abort 'App target not found' unless app
 
-          release = app.build_configurations.find { |config| config.name == 'Release' }
-          abort 'App Release configuration not found' unless release
+          # Minimum iOS version
+          app.build_configurations.each do |config|
+            config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.0'
+          end
+
+          # Distribution signing
+          release = app.build_configurations.find do |config|
+            config.name == 'Release'
+          end
+
+          abort 'Release configuration not found' unless release
 
           settings = release.build_settings
+
           settings['DEVELOPMENT_TEAM'] = ENV.fetch('TEAM_ID')
-          settings['PRODUCT_BUNDLE_IDENTIFIER'] = 'com.miyukidesign.vtusong'
+
+          settings['PRODUCT_BUNDLE_IDENTIFIER'] =
+            'com.miyukidesign.vtusong'
+
           settings['CODE_SIGN_STYLE'] = 'Manual'
-          settings['CODE_SIGN_IDENTITY'] = 'Apple Distribution'
-          settings['CODE_SIGN_IDENTITY[sdk=iphoneos*]'] = 'Apple Distribution'
-          settings['PROVISIONING_PROFILE_SPECIFIER'] = 'AppStore com.miyukidesign.vtusong'
+
+          settings['CODE_SIGN_IDENTITY'] =
+            'Apple Distribution'
+
+          settings['CODE_SIGN_IDENTITY[sdk=iphoneos*]'] =
+            'Apple Distribution'
+
+          settings['PROVISIONING_PROFILE_SPECIFIER'] =
+            'AppStore com.miyukidesign.vtusong'
 
           project.root_object.attributes['TargetAttributes'] ||= {}
+
           project.root_object.attributes['TargetAttributes'][app.uuid] ||= {}
-          project.root_object.attributes['TargetAttributes'][app.uuid]['ProvisioningStyle'] = 'Manual'
+
+          project.root_object.attributes['TargetAttributes'][app.uuid]['ProvisioningStyle'] =
+            'Manual'
+
           project.save
-          puts 'Configured Apple Distribution signing for the App Release target only.'
+
+          puts 'iOS minimum deployment target: 15.0'
+          puts 'Apple Distribution signing configured for App target.'
           RUBY
 
       - name: Create export settings
         env:
           TEAM_ID: ${{ vars.APPSTORE_TEAM_ID }}
-        run: python3 scripts/export_options.py
+        run: |
+          python3 scripts/export_options.py
 
       - name: Archive and export IPA
         id: build
