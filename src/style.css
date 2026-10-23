@@ -11,3 +11,8 @@ main{padding:0 16px 40px}.hero{position:relative;overflow:hidden;border-radius:0
 .lyric-line.lyric-active {background:linear-gradient(90deg,#6e3b78aa,#6e3b7810);border-radius:8px;box-shadow:inset 3px 0 #e7a2ff;padding-left:6px;transition:background .14s ease}
 .lyric-line.lyric-active p,.lyric-line.lyric-active span{color:#fff5ff;font-weight:800}
 .range-switch button{min-width:0;overflow-wrap:anywhere}
+
+/* Each explicit lyric fragment is tied to the note's start beat and duration. */
+.lyric-fragment {display:inline-block;padding:0 1px;border-radius:4px;color:#d5c6e4;font-size:inherit !important;width:auto !important;white-space:pre}
+.lyric-fragment.fragment-active{background:#e8b0fd;color:#251130 !important;box-shadow:0 0 8px #c582f788;font-weight:900}
+.note-lyric{color:#f4c7ff;font-size:12px;min-width:24px}

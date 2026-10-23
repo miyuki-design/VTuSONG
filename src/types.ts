@@ -1,7 +1,7 @@
 export const INSTRUMENTS = ['piano', 'guitar', 'bass', 'drums', 'strings', 'synth'] as const
 export type Instrument = (typeof INSTRUMENTS)[number]
 export type Pattern = 'pulse' | 'arpeggio' | 'strum' | 'pad' | 'groove'
-export interface Note { bar: number; beat: number; duration: number; midi: number }
+export interface Note { bar: number; beat: number; duration: number; midi: number; lyric?: string }
 export interface Chord { root: number; quality: 'major' | 'minor' | 'dom7' | 'sus4' }
 export interface Arrangement { instrument: Instrument; pattern: Pattern; level: number }
 export interface Lyric { bar: number; text: string }
@@ -40,7 +40,7 @@ export function validateSong(value: unknown): Song {
   if (!Number.isFinite(s.bpm) || s.bpm < 60 || s.bpm > 180) throw new Error('BPMが範囲外です')
   if (s.chords.length !== s.bars || s.melody.length < 8 || s.melody.length > 160) throw new Error('作曲データが不完全です')
   if (s.lyrics.length !== s.bars) throw new Error('歌詞データが不完全です')
-  if (!s.melody.every(n => Number.isInteger(n.bar) && n.bar >= 0 && n.bar < s.bars && Number.isFinite(n.beat) && n.beat >= 0 && n.beat < 4 && Number.isFinite(n.duration) && n.duration > 0 && n.beat + n.duration <= 4.001 && Number.isInteger(n.midi) && n.midi >= 45 && n.midi <= 88)) throw new Error('メロディーの音符が不正です')
+  if (!s.melody.every(n => (n.lyric === undefined || (typeof n.lyric === 'string' && n.lyric.length <= 30)) && Number.isInteger(n.bar) && n.bar >= 0 && n.bar < s.bars && Number.isFinite(n.beat) && n.beat >= 0 && n.beat < 4 && Number.isFinite(n.duration) && n.duration > 0 && n.beat + n.duration <= 4.001 && Number.isInteger(n.midi) && n.midi >= 45 && n.midi <= 88)) throw new Error('メロディーの音符が不正です')
   if (!s.chords.every(c => Number.isInteger(c.root) && c.root >= 36 && c.root <= 83 && ['major','minor','dom7','sus4'].includes(c.quality))) throw new Error('コードが不正です')
   if (!s.arrangement.every(a => INSTRUMENTS.includes(a.instrument) && ['pulse','arpeggio','strum','pad','groove'].includes(a.pattern) && Number.isFinite(a.level) && a.level >= 0 && a.level <= 1)) throw new Error('編曲情報が不正です')
   if (!s.lyrics.every(l => Number.isInteger(l.bar) && l.bar >= 0 && l.bar < s.bars && typeof l.text === 'string')) throw new Error('歌詞が不正です')
