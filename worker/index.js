@@ -1,4 +1,4 @@
-// VTuSONG genre-aware original songwriting engine v4.
+// VTuSONG genre-aware original songwriting engine v4.1 (repair patch).
 // Replace worker/index.js. Preserve existing client song schema and /api endpoints.
 const INSTRUMENTS=['piano','guitar','bass','drums','strings','synth'];
 const PATTERNS=['pulse','arpeggio','strum','pad','groove'];
@@ -45,6 +45,53 @@ export function verifyInput(raw){
 }
 const near=(a,b)=>Math.abs(a-b)<.00001;
 function notesInBar(song,b){return song.melody.filter(n=>n.bar===b).sort((a,c)=>a.beat-c.beat);}
+// AIの微小な音符ズレ・未割当歌詞を、既存の歌詞を使って補正する。
+// 単にエラーを隠さず、修復不能な曲はinspectで拒否する。
+export function repairSong(song,input){
+ if(!song||!Array.isArray(song.melody)||!Array.isArray(song.lyrics))return song;
+ const originalLyrics=new Map(song.lyrics.filter(l=>l&&Number.isInteger(l.bar)).map(l=>[l.bar,typeof l.text==='string'?l.text:'']));
+ const all=[];
+ for(let bar=0;bar<16;bar++){
+  const source=song.melody.filter(n=>n&&Math.round(Number(n.bar))===bar&&Number.isFinite(Number(n.beat))&&Number.isFinite(Number(n.duration))&&Number.isFinite(Number(n.midi)))
+   .sort((a,b)=>Number(a.beat)-Number(b.beat));
+  const fixed=[];
+  let end=0;
+  for(const item of source){
+   // 再生エンジンの0.5拍グリッドへスナップし、重なりを解消する。
+   const rawBeat=Math.round(Number(item.beat)*2)/2;
+   const beat=Math.max(0,Math.min(3.5,Math.max(end,rawBeat)));
+   if(beat>=4)continue;
+   let duration=Math.round(Number(item.duration)*2)/2;
+   duration=Math.max(.5,Math.min(duration,4-beat));
+   const note={...item,bar,beat,duration,midi:Math.max(45,Math.min(88,Math.round(Number(item.midi)))),lyric:typeof item.lyric==='string'?item.lyric:''};
+   fixed.push(note);end=beat+duration;
+  }
+  if(!fixed.length)continue;
+  // 既存の音符断片を優先し、不足があればAIの小節歌詞を使う。
+  let syllables=fixed.map(n=>n.lyric.trim());
+  const text=originalLyrics.get(bar)||'';
+  if(syllables.some(x=>!x)&&text.trim()){
+   const chars=Array.from(text.replace(/\s/g,''));
+   if(chars.length>=fixed.length){
+    syllables=fixed.map((_,i)=>chars.slice(Math.floor(i*chars.length/fixed.length),Math.floor((i+1)*chars.length/fixed.length)).join(''));
+   }else if(chars.length){
+    syllables=fixed.map((_,i)=>chars[i]||'ー');
+   }
+  }
+  // 歌詞の資料がない無音節音符は、直前母音の延長として扱う。
+  if(syllables.some(x=>!x)&&syllables.some(Boolean)){
+   syllables=syllables.map((s,i)=>s||(i?'ー':'あ'));
+  }
+  fixed.forEach((n,i)=>n.lyric=syllables[i]);
+  all.push(...fixed);
+ }
+ song.melody=all;
+ // 実際に割り当てられた音符断片の連結を歌詞の正本とする。
+ if(all.length&&Array.from({length:16},(_,b)=>all.some(n=>n.bar===b)).every(Boolean)){
+  song.lyrics=Array.from({length:16},(_,bar)=>({bar,text:all.filter(n=>n.bar===bar).sort((a,b)=>a.beat-b.beat).map(n=>n.lyric).join('')}));
+ }
+ return song;
+}
 function inspect(song,input){
  if(!song||song.bars!==16||!Array.isArray(song.chords)||song.chords.length!==16||!Array.isArray(song.lyrics)||song.lyrics.length!==16)throw Error('歌詞・コードの16小節構成が不正です');
  if(!Number.isInteger(song.bpm)||song.bpm<60||song.bpm>180)throw Error('BPMが範囲外です');
@@ -92,7 +139,7 @@ async function askAI(input,env,task,feedback){
  if(!response.ok){const detail=await response.text();throw Error(`AI API (${response.status}): ${detail.slice(0,220)}`);}
  const data=await response.json();if(data.choices?.[0]?.finish_reason==='length')throw Error('AIの出力が上限で中断されました');
  const content=data.choices?.[0]?.message?.content;if(!content)throw Error('AIが楽曲を返しませんでした');
- return inspect(JSON.parse(content),input);
+ return inspect(repairSong(JSON.parse(content),input),input);
 }
 export async function createSong(input,env,revision=null){
  if(!env.OPENAI_API_KEY)throw Error('サーバー側のOPENAI_API_KEYが未設定です');
@@ -102,7 +149,7 @@ export async function createSong(input,env,revision=null){
  let best=null,bestCount=-1,lastError=null;
  // One initial generation and at most one quality-focused retry: bounded API cost.
  for(let attempt=0;attempt<2;attempt++){
-  const feedback=attempt===0?'':`前回の生成で不足した要素を確実に入れてください: ${lastError||'サビの上昇、裏拍、フック、半音経過音、休符'}。歌詞と音符の対応を厳守。`;
+  const feedback=attempt===0?'':`前回の生成で次を修正してください: ${lastError||'サビの上昇、裏拍、フック、半音経過音、休符'}。16小節すべての音符にlyricが必要です。空欄禁止。beatとdurationは0.5刻みで重複禁止。`;
   try{
    const proposed=await askAI(input,env,task,feedback);
    let candidate=proposed;
@@ -110,7 +157,7 @@ export async function createSong(input,env,revision=null){
     const old=revision.song;
     candidate={...old};
     switch(revision.mode){
-     case 'lyrics': {const a=[...old.melody].sort((x,y)=>x.bar-y.bar||x.beat-y.beat), b=[...proposed.melody].sort((x,y)=>x.bar-y.bar||x.beat-y.beat); candidate.melody=a.map((n,i)=>({...n,lyric:b[i]?.lyric||n.lyric}));candidate.lyrics=old.lyrics;break;}
+     case 'lyrics': {candidate.melody=old.melody.map(n=>({...n}));for(let bar=0;bar<16;bar++){const a=candidate.melody.filter(n=>n.bar===bar).sort((x,y)=>x.beat-y.beat), b=proposed.melody.filter(n=>n.bar===bar).sort((x,y)=>x.beat-y.beat);const text=b.map(n=>n.lyric).join('')||proposed.lyrics[bar]?.text||'';const chars=Array.from(text);if(!chars.length)continue;a.forEach((n,i)=>{const start=Math.floor(i*chars.length/a.length),end=Math.floor((i+1)*chars.length/a.length);n.lyric=chars.slice(start,end).join('')||'ー';});}candidate.lyrics=old.lyrics;break;}
      case 'melody':candidate.melody=proposed.melody;candidate.lyrics=proposed.lyrics;break;
      case 'arrangement':candidate.arrangement=proposed.arrangement;break;
      case 'chorus':candidate.melody=[...old.melody.filter(n=>n.bar<8),...proposed.melody.filter(n=>n.bar>=8)];candidate.lyrics=old.lyrics;candidate.chords=old.chords.map((ch,i)=>i<8?ch:proposed.chords[i]);break;
@@ -130,7 +177,7 @@ export async function createSong(input,env,revision=null){
 export default {async fetch(request,env){
  const url=new URL(request.url);
  if(request.method==='OPTIONS')return new Response(null,{headers});
- if(url.pathname==='/health')return json({ok:true,service:'VTuSONG AI',styleEngine:'v4'});
+ if(url.pathname==='/health')return json({ok:true,service:'VTuSONG AI',styleEngine:'v4.1'});
  if(!['/api/generate','/api/revise'].includes(url.pathname))return json({error:'Not found'},404);
  if(request.method!=='POST')return json({error:'POST only'},405);
  if(Number(request.headers.get('Content-Length')||0)>32768)return json({error:'入力が長すぎます'},413);
