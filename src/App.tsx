@@ -15,7 +15,8 @@ export default function App(){
   const [busy,setBusy]=useState(false)
   const [notice,setNotice]=useState('')
   const [playing,setPlaying]=useState(false)
-  const [previewMode,setPreviewMode]=useState<'demo'|'offvocal'>('demo')
+  const [previewMode,setPreviewMode]=useState<'demo'|'offvocal'|'melody'>('demo')
+  const [position,setPosition]=useState(0)
   const [tab,setTab]=useState<'create'|'song'>('create')
   const [editLyrics,setEditLyrics]=useState(false)
   const [editBar,setEditBar]=useState(8)
@@ -25,7 +26,7 @@ export default function App(){
   function toggleInstrument(instrument:Instrument){setForm(f=>({...f,instruments:f.instruments.includes(instrument)?f.instruments.filter(x=>x!==instrument):[...f.instruments,instrument]}))}
   async function generate(){
     if(form.instruments.length===0){setNotice('使いたい楽器を1つ以上選んでね');return}
-    setBusy(true);setNotice('AIが歌詞・メロディー・編曲を考えています…');stop();setPlaying(false)
+    setBusy(true);setNotice('AIが歌詞・メロディー・編曲を考えています…');stop();setPlaying(false);setPosition(0)
     try{
       const base=import.meta.env.VITE_API_BASE_URL?.trim()
       if(!base)throw new Error('AI接続先が未設定です。READMEを参考にVITE_API_BASE_URLを設定してください。')
@@ -52,8 +53,8 @@ export default function App(){
   function sample(){stop();setPlaying(false);setSong(structuredClone(demoSong));setIsDemo(true);setTab('song');setNotice('動作確認用のサンプルです（AI生成ではありません）')}
   async function togglePlay(){
     if(!song)return
-    if(playing){stop();setPlaying(false);return}
-    try{setPlaying(true);await play(song,previewMode,()=>setPlaying(false))}catch(err){setPlaying(false);setNotice(`再生できません：${safeError(err)}`)}
+    if(playing){stop();setPlaying(false);setPosition(0);return}
+    try{setPlaying(true);await play(song,previewMode,()=>{setPlaying(false);setPosition(0)},setPosition)}catch(err){setPlaying(false);setNotice(`再生できません：${safeError(err)}`)}
   }
   async function exportFile(mode:'demo'|'offvocal'){
     if(!song)return
@@ -79,8 +80,8 @@ export default function App(){
         <p className="under">作詞・作曲・編曲をAIが生成。初期版は16小節、歌声の録音はVTuRECへ。</p>
       </>:song?<>
         <section className="song-head card"><div className="cover"><AudioLines size={52}/></div><div className="song-summary"><div className="song-kicker">{isDemo?'DEMO TRACK':'AI COMPOSED TRACK'}</div><input aria-label="曲名" value={song.title} onChange={e=>updateSong('title',e.target.value)} className="song-title"/><div className="song-meta">{song.genre} ・ {song.key} ・ {song.bars}小節</div><div className="bpm"><span>BPM</span><input type="number" min="60" max="180" value={song.bpm} onChange={e=>updateSong('bpm',e.target.value)}/></div></div></section>
-        <section className="card"><div className="section-title"><span className="number">♫</span><h2>試聴</h2></div><div className="range-switch">{([['demo','ガイド入り'],['offvocal','オフボーカル']] as const).map(([m,label])=><button key={m} className={previewMode===m?'chosen':''} onClick={()=>{stop();setPlaying(false);setPreviewMode(m)}}>{label}</button>)}</div><button className="player" onClick={togglePlay}>{playing?<Square size={21} fill="currentColor"/>:<Play size={21} fill="currentColor"/>}{playing?'停止':'再生'}<span><Volume2 size={17}/> {Math.round(song.bars*4*60/song.bpm)}秒</span></button><p className="hint">※ガイドメロディーは楽器音です。歌声の合成ではありません。</p></section>
-        <section className="card"><div className="section-title"><span className="number">✍</span><h2>歌詞</h2><button className="text-button" onClick={()=>setEditLyrics(v=>!v)}><PencilLine size={15}/>{editLyrics?'完了':'編集'}</button></div><div className="lyrics">{song.lyrics.map((l,index)=><div className="lyric-line" key={index}><span>{String(index+1).padStart(2,'0')}</span>{editLyrics?<input value={l.text} aria-label={`${index+1}小節目の歌詞`} onChange={e=>setSong(s=>s?{...s,lyrics:s.lyrics.map((item,i)=>i===index?{...item,text:e.target.value}:item)}:null)}/>:<p>{l.text}</p>}</div>)}</div></section>
+        <section className="card"><div className="section-title"><span className="number">♫</span><h2>試聴</h2></div><div className="range-switch">{([['demo','ガイド入り'],['melody','メロディーのみ'],['offvocal','オフボーカル']] as const).map(([m,label])=><button key={m} className={previewMode===m?'chosen':''} onClick={()=>{stop();setPlaying(false);setPosition(0);setPreviewMode(m)}}>{label}</button>)}</div><button className="player" onClick={togglePlay}>{playing?<Square size={21} fill="currentColor"/>:<Play size={21} fill="currentColor"/>}{playing?'停止':'再生'}<span><Volume2 size={17}/> {Math.round(song.bars*4*60/song.bpm)}秒</span></button><p className="hint">※「メロディーのみ」で音を覚えられます。歌詞は小節単位で同期表示します（音節単位ではありません）。</p></section>
+        <section className="card"><div className="section-title"><span className="number">✍</span><h2>歌詞</h2><button className="text-button" onClick={()=>setEditLyrics(v=>!v)}><PencilLine size={15}/>{editLyrics?'完了':'編集'}</button></div><div className="lyrics" aria-label="歌詞（再生中は小節単位で同期表示）">{song.lyrics.map((l,index)=><div className={`lyric-line ${playing && index===Math.min(song.bars-1,Math.floor(position*song.bpm/240))?'lyric-active':''}`} key={index}><span>{String(index+1).padStart(2,'0')}</span>{editLyrics?<input value={l.text} aria-label={`${index+1}小節目の歌詞`} onChange={e=>setSong(s=>s?{...s,lyrics:s.lyrics.map((item,i)=>i===index?{...item,text:e.target.value}:item)}:null)}/>:<p>{l.text}</p>}</div>)}</div></section>
         <section className="card"><div className="section-title"><span className="number">♪</span><h2>メロディー編集</h2></div><p className="hint">小節を選び、音程を半音ずつ調整できます。</p><div className="bar-grid">{Array.from({length:16},(_,i)=><button key={i} className={editBar===i?'chosen':''} onClick={()=>setEditBar(i)}>{i+1}</button>)}</div><div className="note-list">{song.melody.map((n,i)=>({n,i})).filter(({n})=>n.bar===editBar).sort((a,b)=>a.n.beat-b.n.beat).map(({n,i})=><div className="note-row" key={i}><span>{n.beat+1}拍目</span><span className="note-midi">MIDI {n.midi}</span><button aria-label="半音下げる" onClick={()=>changeNote(i,-1)}>−</button><button aria-label="半音上げる" onClick={()=>changeNote(i,1)}>＋</button></div>)}</div></section>
         <section className="card"><div className="section-title"><span className="number">🎼</span><h2>編曲トラック</h2></div>{song.arrangement.map((a,index)=><div className="track" key={index}><div className="track-name"><Music2 size={17}/>{NAMES[a.instrument]}<small>{a.pattern}</small></div><input type="range" min="0" max="1" step=".05" aria-label={`${NAMES[a.instrument]}の音量`} value={a.level} onChange={e=>setSong(s=>s?{...s,arrangement:s.arrangement.map((item,i)=>i===index?{...item,level:Number(e.target.value)}:item)}:null)}/></div>)}<p className="hint">音量を0にすると、その楽器は書き出しから除外されます。</p></section>
         <section className="card"><div className="section-title"><span className="number">✦</span><h2>AIで部分再生成</h2></div><p className="hint">気に入った部分は残し、選んだ部分だけ作り直します。</p><div className="revise-grid"><button disabled={busy} onClick={()=>revise('lyrics')}>✍ 歌詞だけ</button><button disabled={busy} onClick={()=>revise('melody')}>♫ メロディーだけ</button><button disabled={busy} onClick={()=>revise('arrangement')}>🎹 編曲だけ</button><button disabled={busy} onClick={()=>revise('chorus')}>✦ サビだけ</button></div></section>

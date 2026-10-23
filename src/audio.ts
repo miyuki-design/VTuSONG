@@ -3,7 +3,7 @@ import { Capacitor } from '@capacitor/core'
 import { Directory, Filesystem } from '@capacitor/filesystem'
 import { Share } from '@capacitor/share'
 
-export type RenderMode = 'demo' | 'offvocal'
+export type RenderMode = 'demo' | 'offvocal' | 'melody'
 type Context = AudioContext | OfflineAudioContext
 const SR = 44100
 const clamp = (x:number,min:number,max:number) => Math.min(max,Math.max(min,x))
@@ -54,31 +54,66 @@ function chordNotes(chord:Chord):number[] {
   const intervals = chord.quality === 'minor' ? [0,3,7] : chord.quality === 'dom7' ? [0,4,7,10] : chord.quality === 'sus4' ? [0,5,7] : [0,4,7]
   return intervals.map(i=>chord.root+i)
 }
-function part(ctx:Context,out:AudioNode,name:Instrument, pattern:string, chord:Chord,t:number,beat:number,level:number) {
-  const notes=chordNotes(chord)
-  const hit=(midi:number, offset:number,length:number,gain:number,wave:OscillatorType='triangle', filter=5500)=>
-    tone(ctx,out,midi,t+offset*beat,length*beat,{gain:gain*level, wave,lowpass:filter,release:.09})
+// Additive plucked instruments: no external samples; avoid brittle oscillator-only sounds.
+function pluck(ctx:Context,out:AudioNode,midi:number,start:number,duration:number,level:number,kind:'piano'|'guitar') {
+  const target=ctx.createGain();target.gain.value=1;target.connect(out)
+  const f=midiFreq(midi)
+  const harmonics=kind==='piano'?[1,.52,.22,.095]:[1,.38,.14,.055]
+  harmonics.forEach((relative,i)=>{
+    const osc=ctx.createOscillator(), amp=ctx.createGain()
+    osc.type='sine'
+    osc.frequency.value=f*(i+1)*(kind==='piano'?(1+i*i*.00012):1)
+    const peak=level*relative
+    amp.gain.setValueAtTime(.00001,start)
+    amp.gain.exponentialRampToValueAtTime(Math.max(.00002,peak),start+(kind==='piano'?.009:.004))
+    amp.gain.exponentialRampToValueAtTime(.00001,start+Math.max(.12,duration)*(kind==='piano'?1.6:1.05)/(1+i*.34))
+    osc.connect(amp);amp.connect(target)
+    osc.start(start);osc.stop(start+Math.max(.12,duration)*(kind==='piano'?1.65:1.1)+.05)
+  })
+}
+function styleFor(genre:string){
+  const g=genre.toLowerCase()
+  if(g.includes('ジャズ'))return 'jazz'
+  if(g.includes('バラード'))return 'ballad'
+  if(g.includes('ロック'))return 'rock'
+  if(g.includes('edm')||g.includes('ボカロ'))return 'dance'
+  if(g.includes('シティ'))return 'city'
+  if(g.includes('アニソン'))return 'anime'
+  return 'pop'
+}
+function part(ctx:Context,out:AudioNode,name:Instrument, pattern:string, chord:Chord,t:number,beat:number,level:number,genre:string,bar:number) {
+  const style=styleFor(genre), notes=chordNotes(chord)
+  const chorus=bar>=8, dynamics=chorus?1.13:.86
+  const hit=(midi:number, offset:number,length:number,gain:number,wave:OscillatorType='triangle', filter=4500)=>
+    tone(ctx,out,midi,t+offset*beat,length*beat,{gain:gain*level*dynamics, wave,lowpass:filter,release:.11})
   if(name==='drums') {
-    for(let b=0;b<4;b++) {
-      if(b===0 || b===2 || (pattern==='groove' && b===3))kick(ctx,out,t+b*beat,level*.9)
-      if(b===1 || b===3)shortNoise(ctx,out,t+b*beat,.17,.11*level,900)
-      shortNoise(ctx,out,t+b*beat,.047,.032*level,5500)
-      shortNoise(ctx,out,t+(b+.5)*beat,.035,.016*level,7000)
+    const kicks=style==='dance'?[0,1,2,3]:style==='rock'||style==='anime'?[0,1.5,2,3.5]:style==='jazz'?[0,2.5]:style==='ballad'?[0,2]:[0,2, ...(chorus?[3.5]:[])]
+    kicks.forEach(b=>kick(ctx,out,t+b*beat,level*(style==='ballad'?.55:.85)*dynamics))
+    ;(style==='jazz'?[1.5,3.5]:[1,3]).forEach(b=>shortNoise(ctx,out,t+b*beat,.12,.08*level*dynamics,style==='jazz'?1600:1000))
+    const subdivisions=style==='ballad'?4:8
+    for(let i=0;i<subdivisions;i++){
+      if(style==='jazz'&&i%4===2)continue
+      const offset=style==='jazz'&&i%2===1?.12:0
+      shortNoise(ctx,out,t+(i*4/subdivisions+offset)*beat,.026,(i%2===0?.018:.012)*level*dynamics,6500)
     }
   } else if(name==='bass') {
     const root=chord.root-24
-    const hitBeat=pattern==='groove'?[0,1.5,2.5,3.5]:[0,2]
-    hitBeat.forEach((p,i)=>hit(root+(i%3===2?7:0),p, .6,.13,'sine',600))
+    const steps=style==='dance'?[0,1,2,3]:style==='jazz'?[0,1,2,3]:style==='ballad'?[0,2.5]:style==='rock'?[0,.5,1.5,2,3]:[0,1.5,2.5, ...(chorus?[3.5]:[])]
+    steps.forEach((b,i)=>hit(root+(style==='jazz'&&i===3?7:0),b,style==='ballad'?1.65:.42,.105,'sine',750))
   } else if(name==='piano') {
-    if(pattern==='arpeggio') for(let i=0;i<8;i++)hit(notes[i%notes.length]+(i>3?12:0),i*.5,.34,.065,'triangle',6000)
-    else for(let p=0;p<4;p+=(pattern==='pulse'?1:2))notes.forEach((n)=>hit(n,p,.8,.048,'triangle',4500))
+    const steps=style==='ballad'?[0,1,2,3]:style==='jazz'?[0,1.75,3.25]:pattern==='arpeggio'||style==='anime'?[0,.5,1,1.5,2,2.5,3,3.5]:[0,2, ...(chorus?[3]:[])]
+    steps.forEach((b,i)=>{
+      const tones=(style==='ballad'||pattern==='arpeggio'||style==='anime')?[notes[i%notes.length]]:notes
+      tones.forEach((n,j)=>pluck(ctx,out,n+(i%7===6?12:0),t+(b+j*.012)*beat,beat*(style==='ballad'?1.35:.75),.048*level*dynamics,'piano'))
+    })
   } else if(name==='guitar') {
-    for(let p=0;p<4;p++) notes.forEach((n,i)=>hit(n-12,p+i*.045,.30,.035,'sawtooth',1200))
+    const steps=style==='rock'||style==='anime'?[0,.5,1,1.5,2,2.5,3,3.5]:style==='ballad'?[0,2]:style==='jazz'?[.5,1.5,2.5,3.5]:[0,1,2,3]
+    steps.forEach((b,i)=>notes.forEach((n,j)=>pluck(ctx,out,n-12,t+(b+j*.025)*beat,.30*beat,.019*level*dynamics*(i%2===0?1:.76),'guitar')))
   } else if(name==='strings') {
-    notes.forEach(n=>tone(ctx,out,n-12,t,3.8*beat,{gain:.025*level,wave:'sawtooth',attack:.35,release:.35,lowpass:1100}))
+    notes.forEach(n=>tone(ctx,out,n-12,t,3.85*beat,{gain:.018*level*dynamics,wave:'triangle',attack:.42,release:.43,lowpass:1400}))
   } else if(name==='synth') {
-    if(pattern==='arpeggio') for(let i=0;i<8;i++)hit(notes[i%notes.length]+12,i*.5,.25,.035,'square',1800)
-    else notes.forEach(n=>tone(ctx,out,n,t,3.3*beat,{gain:.028*level,wave:'sine',attack:.08,release:.35,lowpass:2500}))
+    if(style==='dance'||style==='anime'||pattern==='arpeggio')for(let i=0;i<8;i++)hit(notes[i%notes.length]+12,i*.5,.23,.026,'sine',3500)
+    else notes.forEach(n=>tone(ctx,out,n,t,3.3*beat,{gain:.022*level*dynamics,wave:'sine',attack:.1,release:.3,lowpass:2600}))
   }
 }
 function schedule(ctx:Context,song:Song,mode:RenderMode,begin:number): number {
@@ -88,26 +123,38 @@ function schedule(ctx:Context,song:Song,mode:RenderMode,begin:number): number {
   master.attack.value=.01; master.release.value=.22
   const gain=ctx.createGain();gain.gain.value=.83
   master.connect(gain);gain.connect(ctx.destination)
-  song.arrangement.forEach(a=>{
+  if(mode!=='melody')song.arrangement.forEach(a=>{
     if(a.level <= 0) return
-    for(let b=0;b<song.bars;b++)part(ctx,master,a.instrument,a.pattern,song.chords[b],begin+b*beat*4,beat,a.level)
+    for(let b=0;b<song.bars;b++)part(ctx,master,a.instrument,a.pattern,song.chords[b],begin+b*beat*4,beat,a.level,song.genre,b)
   })
-  if(mode==='demo')for(const n of song.melody){
+  if(mode!=='offvocal')for(const n of song.melody){
     tone(ctx,master,n.midi,begin+(n.bar*4+n.beat)*beat,n.duration*beat*.93,{gain:.12,attack:.017,release:.12,wave:'sine',lowpass:3000})
     tone(ctx,master,n.midi+12,begin+(n.bar*4+n.beat)*beat,n.duration*beat*.93,{gain:.023,attack:.017,release:.12,wave:'triangle',lowpass:3500})
   }
   return song.bars*4*beat
 }
 let current:AudioContext|null = null
-export async function play(song:Song, mode:RenderMode, onFinished:()=>void): Promise<void> {
+let clock:number|null=null
+let finishedTimer:number|null=null
+export async function play(song:Song,mode:RenderMode,onFinished:()=>void,onPosition?:(seconds:number)=>void):Promise<void>{
   stop()
   const ctx=new AudioContext({sampleRate:SR})
   current=ctx
   await ctx.resume()
-  const duration=schedule(ctx,song,mode,ctx.currentTime+.07)
-  window.setTimeout(()=>{if(current===ctx){stop();onFinished()}},(duration+.6)*1000)
+  if(current!==ctx)return
+  const begin=ctx.currentTime+.07
+  const duration=schedule(ctx,song,mode,begin)
+  onPosition?.(0)
+  clock=window.setInterval(()=>{
+    if(current===ctx)onPosition?.(Math.max(0,Math.min(duration,ctx.currentTime-begin)))
+  },70)
+  finishedTimer=window.setTimeout(()=>{
+    if(current===ctx){stop();onFinished()}
+  },(duration+.2)*1000)
 }
 export function stop(){
+  if(clock!==null){clearInterval(clock);clock=null}
+  if(finishedTimer!==null){clearTimeout(finishedTimer);finishedTimer=null}
   if(current){const ctx=current;current=null;void ctx.close()}
 }
 export async function renderWav(song:Song,mode:RenderMode):Promise<Blob> {

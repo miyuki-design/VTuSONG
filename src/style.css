@@ -6,3 +6,8 @@ main{padding:0 16px 40px}.hero{position:relative;overflow:hidden;border-radius:0
 @media (min-width:600px){main{padding:0 30px 35px}.hero{margin:0 -30px 23px;padding:42px 30px 40px}.card{padding:26px}.instrument-grid{grid-template-columns:repeat(3,1fr)}}
 
 .bar-grid{display:grid;grid-template-columns:repeat(8,1fr);gap:5px;margin:13px 0}.bar-grid button{border:1px solid #524361;background:#272135;color:#cabada;font-size:12px;border-radius:7px;padding:9px 0}.bar-grid button.chosen{background:#a36ac4;color:#1d1229;border-color:#d5abe5;font-weight:800}.note-list{border-radius:12px;background:#151324;padding:6px 13px}.note-row{display:flex;align-items:center;gap:10px;border-bottom:1px solid #ffffff10;padding:7px 0;font-size:12px;color:#b4a8c6}.note-row:last-child{border:0}.note-midi{margin-left:auto;color:#f2e3fb;font-weight:700}.note-row button{background:#3b2b4b;border:1px solid #6e5184;color:#f2d4ff;border-radius:7px;width:34px;height:30px;font-size:18px}.revise-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:9px}.revise-grid button{background:#342540;color:#edcafa;border:1px solid #644872;border-radius:10px;padding:12px 5px;font-size:12px;font-weight:700}
+
+/* Playback follows the current lyric bar, without pretending to align individual syllables. */
+.lyric-line.lyric-active {background:linear-gradient(90deg,#6e3b78aa,#6e3b7810);border-radius:8px;box-shadow:inset 3px 0 #e7a2ff;padding-left:6px;transition:background .14s ease}
+.lyric-line.lyric-active p,.lyric-line.lyric-active span{color:#fff5ff;font-weight:800}
+.range-switch button{min-width:0;overflow-wrap:anywhere}
