@@ -1,0 +1,6 @@
+name = "vtusong-ai"
+main = "index.js"
+compatibility_date = "2026-10-01"
+
+[vars]
+OPENAI_MODEL = "gpt-4.1-mini"
